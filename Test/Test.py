@@ -10,7 +10,8 @@ from datetime import datetime
 from prophet import Prophet
 import streamlit.components.v1 as components
 import hashlib
-
+from io import BytesIO
+# import calendar # Removed as it's no longer used after removing laporan_page
 
 st.set_page_config(
     page_title="Xpense",
@@ -18,22 +19,7 @@ st.set_page_config(
     page_icon="Xpense V5.png"
 )
 
-
-def angka_input_with_format(label, key="formatted_input"):
-    st.markdown(f"<label>{label}</label>", unsafe_allow_html=True)
-    html_code = f"""
-    <script>
-    function formatNumber(input) {{
-        var value = input.value.replace(/[^0-9]/g, '');
-        if (value) {{
-            input.value = parseInt(value).toLocaleString('id-ID');
-        }} else {{
-            input.value = '';
-        }}\n    }}\n    </script>\n    <input id=\"{key}\" type=\"text\" oninput=\"formatNumber(this)\" placeholder=\"Contoh: 100000\" style=\"padding: 0.5rem; width: 100%; border-radius: 5px; border: 1px solid #ccc;\">\n    <script>\n        const input = window.parent.document.getElementById(\"{key}\");\n        input?.addEventListener(\"input\", function() {{\n            const value = input.value.replaceAll('.', '');\n            window.parent.postMessage({{ type: \"streamlit:setComponentValue\", key: \"{key}\", value: value }}, \"*\");
-        }});\n    </script>\n    """
-    value = components.html(html_code, height=60)
-    return value
-
+# --- Database Connection ---
 DB_NAME = "users.db"
 
 def get_connection():
@@ -72,31 +58,21 @@ def initialize_db():
         bukti_img BLOB
     )
     """)
+
+    # --- Inisialisasi Tabel Target Jika Belum Ada ---
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS target_anggaran (
+            username TEXT,
+            bulan TEXT,
+            tahun INTEGER,
+            target_pengeluaran INTEGER,
+            target_tabungan INTEGER,
+            target_investasi INTEGER,
+            PRIMARY KEY (username, bulan, tahun)
+        )
+    """)
     conn.commit()
     conn.close()
-
-def register_user(username, password, role):
-    password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)", (username, password_hash, role))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False
-    finally:
-        conn.close()
-
-def login_user(username, password):
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT password_hash, role FROM users WHERE username = ?", (username,))
-    row = cursor.fetchone()
-    conn.close()
-    if row and bcrypt.checkpw(password.encode(), row[0]):
-        return True, row[1]
-    return False, None
 
 def get_user_settings(username):
     conn = get_connection()
@@ -105,6 +81,108 @@ def get_user_settings(username):
     result = cursor.fetchone()
     conn.close()
     return result
+
+# --- Login / Register Page ---
+def login_register_page():
+    st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Selamat Datang di Aplikasi Xpense</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; font-size: 18px;'>Kelola keuangan Anda dengan lebih mudah dan cerdas!</p>", unsafe_allow_html=True)
+
+    # Centering the login/register form
+    col1, col2, col3 = st.columns([1, 2, 1])
+    with col2:
+        tab1, tab2 = st.tabs(["Masuk", "Daftar"])
+
+        with tab1:
+            st.subheader("Masuk ke Akun Anda")
+            username_login = st.text_input("Username", key="username_login")
+            password_login = st.text_input("Password", type="password", key="password_login")
+
+            if st.button("Login", use_container_width=True):
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT password_hash FROM users WHERE username = ?", (username_login,))
+                user_data = cursor.fetchone()
+                conn.close()
+
+                if user_data:
+                    if bcrypt.checkpw(password_login.encode('utf-8'), user_data[0]):
+                        st.session_state["logged_in"] = True
+                        st.session_state["username"] = username_login
+                        st.session_state["current_page"] = "Home" # Redirect to home after login
+                        st.success("✅ Login Berhasil!")
+                        st.rerun()
+                    else:
+                        st.error("Username atau password salah.")
+                else:
+                    st.error("Username atau password salah.")
+
+        with tab2:
+            st.subheader("Daftar Akun Baru")
+            username_register = st.text_input("Username", key="username_register")
+            password_register = st.text_input("Password", type="password", key="password_register")
+            confirm_password_register = st.text_input("Konfirmasi Password", type="password", key="confirm_password_register")
+
+            if st.button("Daftar", use_container_width=True):
+                if not username_register or not password_register or not confirm_password_register:
+                    st.warning("Mohon lengkapi semua kolom.")
+                elif password_register != confirm_password_register:
+                    st.error("Password dan konfirmasi password tidak cocok.")
+                else:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    
+                    # Check if username already exists
+                    cursor.execute("SELECT * FROM users WHERE username = ?", (username_register,))
+                    if cursor.fetchone():
+                        st.error("Username sudah ada. Mohon gunakan username lain.")
+                    else:
+                        hashed_password = bcrypt.hashpw(password_register.encode('utf-8'), bcrypt.gensalt())
+                        cursor.execute("INSERT INTO users (username, password_hash, nama_akun) VALUES (?, ?, ?)", 
+                                       (username_register, hashed_password, username_register)) # Default nama_akun to username
+                        conn.commit()
+                        st.success("✅ Registrasi Berhasil! Silakan Login.")
+                    conn.close()
+
+# --- Logout Confirmation Page ---
+def logout_confirmation_page():
+    st.sidebar.warning("Anda yakin ingin keluar?")
+    col_yes, col_no = st.sidebar.columns(2)
+    if col_yes.button("Ya, Keluar"):
+        st.session_state["logged_in"] = False
+        st.session_state["username"] = None
+        st.session_state["confirm_logout"] = False
+        st.session_state["current_page"] = "Login" # Redirect to login page
+        st.info("Anda telah berhasil keluar.")
+        st.rerun()
+    if col_no.button("Tidak"):
+        st.session_state["confirm_logout"] = False
+        st.rerun()
+
+# --- Fungsi-fungsi Halaman Aplikasi ---
+def angka_input_with_format(label, key="formatted_input"):
+    st.markdown(f"<label>{label}</label>", unsafe_allow_html=True)
+    html_code = f"""
+    <script>
+    function formatNumber(input) {{
+        var value = input.value.replace(/[^0-9]/g, '');
+        if (value) {{
+            input.value = parseInt(value).toLocaleString('id-ID');
+        }} else {{
+            input.value = '';
+        }}
+    }}
+    </script>
+    <input id="{key}" type="text" oninput="formatNumber(this)" placeholder="Contoh: 100000" style="padding: 0.5rem; width: 100%; border-radius: 5px; border: 1px solid #ccc;">
+    <script>
+        const input = window.parent.document.getElementById("{key}");
+        input?.addEventListener("input", function() {{
+            const value = input.value.replaceAll('.', '');
+            window.parent.postMessage({{ type: "streamlit:setComponentValue", key: "{key}", value: value }}, "*");
+        }});
+    </script>
+    """
+    value = components.html(html_code, height=60)
+    return value
 
 def home_page():
     username = st.session_state["username"]
@@ -177,7 +255,7 @@ def home_page():
     emergency_rate_from_db, _ = get_user_settings(username) # Renamed to avoid conflict
 
     # Set initial_slider_value to 5 for new submissions
-    initial_slider_value = 5 
+    initial_slider_value = emergency_rate_from_db if emergency_rate_from_db is not None else 5 
 
     new_rate = st.slider("Persentase Dana Darurat (%)", 5, 10, value=initial_slider_value, key=f"emergency_rate_slider_{st.session_state['input_key']}")
     
@@ -187,7 +265,6 @@ def home_page():
         cursor.execute("UPDATE users SET emergency_rate = ? WHERE username = ?", (new_rate, username))
         conn.commit()
         conn.close()
-        # No need for st.session_state["emergency_rate_set"] = True here.
         st.rerun() # Add this line to make the change immediate
 
     keterangan = st.text_input("Keterangan (Opsional)", key=f"keterangan_{st.session_state['input_key']}")
@@ -226,6 +303,7 @@ def home_page():
             st.success("✅ Data berhasil disimpan.")
             # Increment key to reset all input widgets after successful submission
             st.session_state["input_key"] += 1
+            st.session_state["reset_report_filters"] = True # Set flag to reset report filters
             st.rerun()
         except ValueError:
             st.error("Jumlah harus berupa angka valid, contoh: 100000")
@@ -250,7 +328,12 @@ def generate_forecasting_insights(df_forecast, periods, data_type):
         last_historical_value = df_forecast['yhat'].iloc[len(df_forecast) - periods - 1]
     else:
         # This case implies df_forecast largely consists of future data or very few historical points.
-        last_historical_value = df_forecast['yhat'].iloc[max(0, len(df_forecast) - periods - 1)]
+        # If there's only future data, we can't compare to historical. Adjust this logic as needed.
+        if len(df_forecast) > 0: # If there's at least one data point
+             last_historical_value = df_forecast['yhat'].iloc[0] # Take the earliest if only future or very few points
+        else:
+            last_historical_value = 0 # Default if no data at all
+
 
     # Calculate the average forecast for the future days
     avg_forecast_future = future_forecast['yhat'].mean()
@@ -429,10 +512,12 @@ def dashboard_page():
             y_data = ["pendapatan", "pengeluaran"]
 
         daily_summary = df.groupby(["tanggal", "jenis"])["jumlah"].sum().unstack().fillna(0)
-        if "pendapatan" not in daily_summary.columns:
-            daily_summary["pendapatan"] = 0
-        if "pengeluaran" not in daily_summary.columns:
-            daily_summary["pengeluaran"] = 0
+        # Ensure 'pendapatan' and 'pengeluaran' columns exist even if no data for them
+        if 'pendapatan' not in daily_summary.columns:
+            daily_summary['pendapatan'] = 0
+        if 'pengeluaran' not in daily_summary.columns:
+            daily_summary['pengeluaran'] = 0
+        
         daily_summary = daily_summary.reset_index()
 
         fig_line = px.line(daily_summary, x="tanggal", y=y_data, markers=False, # Removed markers for simplification
@@ -597,7 +682,7 @@ def riwayat_page():
             filtered_df = filtered_df[filtered_df["tanggal"].dt.month == selected_month_num]
         else:
             st.info("Tidak ada data bulan yang tersedia untuk difilter.")
-            filtered_df = pd.DataFrame() # Empty dataframe if no months to display
+            filtered_df = pd.DataFrame() # Empty dataframe if no months
 
     elif filter_mode == "Tahun":
         unique_years = sorted(filtered_df["tanggal"].dt.year.unique())
@@ -606,7 +691,7 @@ def riwayat_page():
             filtered_df = filtered_df[filtered_df["tanggal"].dt.year == selected_year]
         else:
             st.info("Tidak ada data tahun yang tersedia untuk difilter.")
-            filtered_df = pd.DataFrame() # Empty dataframe if no years to display
+            filtered_df = pd.DataFrame() # Empty dataframe if no years
     elif filter_mode == "Rentang Tanggal":
         date_range = st.date_input("Pilih Rentang Tanggal", [])
         if len(date_range) == 2:
@@ -835,38 +920,34 @@ def akun_page():
     # GANTI USERNAME & PASSWORD
     st.subheader("🔑 Ganti Username & Password")
 
-    # GANTI USERNAME DENGAN VALIDASI USERNAME LAMA
     with st.expander("Ganti Username"):
-        old_username_input = st.text_input("Masukkan Username Saat Ini")
-        new_username = st.text_input("Username Baru")
-        if st.button("Simpan Username"):
-            if old_username_input and new_username:
-                if old_username_input == username:
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    try:
+        new_username = st.text_input("Username baru", key="new_username_input")
+        if st.button("Simpan Username", key="save_username_button"):
+            if new_username:
+                conn = get_connection()
+                cursor = conn.cursor()
+                try:
+                    # Check if the new username already exists
+                    cursor.execute("SELECT username FROM users WHERE username = ?", (new_username,))
+                    if cursor.fetchone():
+                        st.error("Username baru sudah digunakan. Mohon pilih username lain.")
+                    else:
                         cursor.execute("UPDATE users SET username = ? WHERE username = ?", (new_username, username))
                         cursor.execute("UPDATE laporan_keuangan SET username = ? WHERE username = ?", (new_username, username))
-                        # Jika ada tabel tabungan:
-                        # cursor.execute("UPDATE tabungan SET username = ? WHERE username = ?", (new_username, username))
+                        cursor.execute("UPDATE target_anggaran SET username = ? WHERE username = ?", (new_username, username)) # Update target table as well
                         conn.commit()
                         st.session_state["username"] = new_username
                         st.success("✅ Username berhasil diperbarui.")
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Gagal memperbarui username: {e}")
-                    finally:
-                        conn.close()
-                else:
-                    st.warning("❌ Username saat ini salah.")
-            else:
-                st.warning("Mohon isi semua kolom.")
+                except Exception as e:
+                    st.error(f"Gagal memperbarui username: {e}")
+                finally:
+                    conn.close()
 
-    # GANTI PASSWORD
     with st.expander("Ganti Password"):
-        current_pw = st.text_input("Password Saat Ini", type="password")
-        new_pw = st.text_input("Password Baru", type="password")
-        if st.button("Simpan Password"):
+        current_pw = st.text_input("Password saat ini", type="password", key="current_pw_input")
+        new_pw = st.text_input("Password baru", type="password", key="new_pw_input")
+        if st.button("Simpan Password", key="save_pw_button"):
             if not current_pw or not new_pw:
                 st.warning("Mohon isi semua kolom.")
             else:
@@ -883,177 +964,38 @@ def akun_page():
                     st.error("Password saat ini salah.")
                 conn.close()
 
-    # HAPUS AKUN DENGAN KONFIRMASI
+    # HAPUS AKUN
     st.subheader("⚠ Hapus Akun")
-    with st.expander("Hapus Akun Saya"):
-        confirm_username = st.text_input("Masukkan Username Anda")
-        confirm_password = st.text_input("Masukkan Password Anda", type="password")
+    if st.button("🗑 Hapus Akun Saya", help="Tindakan ini tidak bisa dibatalkan"):
+        conn = get_connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+            cursor.execute("DELETE FROM laporan_keuangan WHERE username = ?", (username,))
+            cursor.execute("DELETE FROM target_anggaran WHERE username = ?", (username,)) # Delete target data
+            conn.commit()
+            conn.close()
+            st.success("Akun dan semua data terkait berhasil dihapus.")
+            st.session_state["logged_in"] = False
+            st.session_state["username"] = None
+            st.session_state["current_page"] = "Login"
+            st.rerun() 
+        except Exception as e:
+            st.error(f"Terjadi kesalahan saat menghapus akun: {e}")
 
-        if st.button("Lanjutkan Hapus Akun"):
-            if not confirm_username or not confirm_password:
-                st.warning("Mohon isi username dan password.")
-            elif confirm_username != username:
-                st.error("❌ Username tidak sesuai dengan akun yang sedang aktif.")
-            else:
-                conn = get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT password_hash FROM users WHERE username = ?", (username,))
-                db_pw = cursor.fetchone()
-                if db_pw and bcrypt.checkpw(confirm_password.encode(), db_pw[0]):
-                    # Konfirmasi terakhir
-                    st.warning("⚠ Apakah kamu yakin ingin menghapus akun ini? Semua data dan akun akan hilang.")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        if st.button("✅ Ya, Hapus Akun"):
-                            try:
-                                cursor.execute("DELETE FROM users WHERE username = ?", (username,))
-                                cursor.execute("DELETE FROM laporan_keuangan WHERE username = ?", (username,))
-                                # Jika ada tabel tabungan:
-                                # cursor.execute("DELETE FROM tabungan WHERE username = ?", (username,))
-                                conn.commit()
-                                conn.close()
-                                st.session_state.clear()
-                                st.success("Akun dan semua data terkait berhasil dihapus.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Terjadi kesalahan saat menghapus akun: {e}")
-                    with col2:
-                        if st.button("❌ Tidak, Batalkan"):
-                            st.info("Penghapusan akun dibatalkan.")
-                else:
-                    st.error("❌ Password salah.")
-
-
-
-# New function for the minimalist login/register layout
-def login_register_page():
-    # Stylish CSS background with green gradient and cleaner layout
-    st.markdown("""
-        <style>
-        .stApp {
-            background: linear-gradient(135deg, #e8f5e9, #ffffff);
-            color: #333;
-            font-family: 'Segoe UI', sans-serif;
-        }
-
-       
-
-        .app-title {
-            font-size: 44px;
-            text-align: center;
-            color: #4CAF50;
-            margin-bottom: 1.2rem;
-            font-weight: 700;
-        }
-
-        .stTextInput > div > div > input {
-            padding: 12px 14px;
-            border-radius: 8px;
-            border: 1px solid #d0d0d0;
-            font-size: 16px;
-        }
-
-        .stTextInput > div > div > input:focus {
-            border-color: #4CAF50;
-            outline: none;
-            box_shadow: 0 0 0 3px rgba(76, 175, 80, 0.3);
-        }
-
-        .stButton > button {
-            background-color: #4CAF50;
-            color: white;
-            font-weight: 600;
-            font-size: 16px;
-            padding: 0.75rem 1rem;
-            border: none;
-            border_radius: 8px;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            width: 100%;
-        }
-
-        .stButton > button:hover {
-            background-color: #43a047;
-        }
-
-        .stTabs [role="tablist"] {
-            justify-content: center;
-            margin-bottom: 1.5rem;
-        }
-
-        .stAlert {
-            border-radius: 8px;
-        }
-
-        .stSidebar {
-            display: none;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="card-login">', unsafe_allow_html=True)
-    st.markdown('<div class="app-title">Xpense</div>', unsafe_allow_html=True)
-
-    tab1, tab2 = st.tabs(["🔐 Masuk", "📝 Daftar Akun"])
-
-    with tab1:
-        st.write("### Selamat Datang Kembali 👋")
-        username = st.text_input("Username", key="login_username", placeholder="Masukkan username Anda")
-        password = st.text_input("Password", type="password", key="login_password", placeholder="Masukkan password Anda")
-        if st.button("Masuk", key="login_button"):
-            if not username or not password:
-                st.error("Username dan Password tidak boleh kosong.")
-            else:
-                success, role = login_user(username, password)
-                if success:
-                    st.success(f"Selamat datang, {username}!")
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"] = username
-                    st.session_state["role"] = role
-                    st.session_state["current_page"] = "Home" # Set to Home after successful login
-                    st.rerun()
-                else:
-                    st.error("Username atau password salah.")
-
-    with tab2:
-        st.write("### Buat Akun Baru 🚀")
-        new_username = st.text_input("Buat Username", key="register_username", placeholder="Contoh: johndoe")
-        new_password = st.text_input("Buat Password", type="password", key="register_password", placeholder="Minimal 6 karakter")
-        confirm_password = st.text_input("Konfirmasi Password", type="password", key="confirm_password", placeholder="Ketik ulang password")
-        if st.button("Daftar", key="register_button"):
-            if not new_username or not new_password or not confirm_password:
-                st.error("Semua kolom harus diisi.")
-            elif new_password != confirm_password:
-                st.error("Password tidak cocok.")
-            else:
-                role = "user"
-                if register_user(new_username, new_password, role):
-                    st.success("🎉 Registrasi berhasil! Silakan login.")
-                else:
-                    st.error("Username sudah digunakan.")
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-
-# New function for logout confirmation page
-def logout_confirmation_page():
-    st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Konfirmasi Logout</h1>", unsafe_allow_html=True)
-    st.write("Anda yakin ingin keluar dari aplikasi?")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Ya, Keluar", key="confirm_logout_yes"):
-            st.session_state.clear()
-            st.session_state["confirm_logout"] = False # Reset flag
-            st.rerun()
-    with col2:
-        if st.button("Tidak, Tetap di Aplikasi", key="confirm_logout_no"):
-            st.session_state["confirm_logout"] = False # Reset flag
-            st.rerun()
 
 def main():
     initialize_db()
    
+    # Initialize session state for login status and current page
+    if "logged_in" not in st.session_state:
+        st.session_state["logged_in"] = False
+    if "username" not in st.session_state:
+        st.session_state["username"] = None
+    if "current_page" not in st.session_state:
+        st.session_state["current_page"] = "Home"
+    if "confirm_logout" not in st.session_state:
+        st.session_state["confirm_logout"] = False
 
     # Custom CSS to make sidebar buttons the same size
     st.markdown("""
@@ -1070,13 +1012,7 @@ def main():
         </style>
     """, unsafe_allow_html=True)
 
-
-    if st.session_state.get("logged_in"):
-        
-        # Initialize session state for current_page if not set
-        if "current_page" not in st.session_state:
-            st.session_state["current_page"] = "Home" # Changed default page to "Home"
-
+    if st.session_state["logged_in"]:
         # Wrap each button in a div with a custom class to apply consistent width
         st.sidebar.markdown('<div class="sidebar-button-container">', unsafe_allow_html=True)
         if st.sidebar.button("🏠 Home"):
@@ -1088,6 +1024,8 @@ def main():
         if st.sidebar.button("📜 Riwayat"):
             st.session_state["current_page"] = "Riwayat"
             st.session_state["confirm_logout"] = False # Ensure confirmation is hidden
+        # Removed the "🗂️ Laporan" button
+        # Removed the "🎯 Target & Anggaran" button
         if st.sidebar.button("👤 Akun"):
             st.session_state["current_page"] = "Akun"
             st.session_state["confirm_logout"] = False # Ensure confirmation is hidden
@@ -1109,6 +1047,8 @@ def main():
                 dashboard_page()
             elif st.session_state["current_page"] == "Riwayat":
                 riwayat_page()
+            # Removed the "Laporan" page rendering
+            # Removed the "Target & Anggaran" page rendering
             elif st.session_state["current_page"] == "Akun":
                 akun_page()
             
