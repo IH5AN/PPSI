@@ -11,8 +11,6 @@ from prophet import Prophet
 import streamlit.components.v1 as components
 import hashlib
 from io import BytesIO
-
-st.write(st.get_option("theme"))
 # import calendar # Removed as it's no longer used after removing laporan_page
 st.set_page_config(
     page_title="Xpense",
