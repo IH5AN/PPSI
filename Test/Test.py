@@ -11,7 +11,7 @@ from prophet import Prophet
 import streamlit.components.v1 as components
 import hashlib
 from io import BytesIO
-# import calendar # Removed as it's no longer used after removing laporan_page
+
 st.set_page_config(
     page_title="Xpense",
     layout="wide",
@@ -81,14 +81,30 @@ def get_user_settings(username):
     conn.close()
     return result
 
+
 # --- Login / Register Page ---
 def login_register_page():
-    st.markdown("<h1 style='text-align: center; color: #4CAF50;'>Selamat Datang di Aplikasi Xpense</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; font-size: 18px;'>Kelola keuangan Anda dengan lebih mudah dan cerdas!</p>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns([2, 6, 2])
+
+    with col2:
+        logo_base64 = base64.b64encode(open("Xpense V5.png", "rb").read()).decode()
+
+        with st.container():
+            st.markdown(
+                f"""
+                <div style='display: flex; justify-content: center; align-items: center; flex-direction: column;'>
+                    <img src='data:image/png;base64,{logo_base64}' width='150' style='margin-bottom: 20px;'/>
+                    <h1 style='text-align: center; margin-bottom: 0; color: #4CAF50;'>Selamat Datang di Aplikasi Xpense</span></h1>
+                    <p style='text-align: center; font-size: 18px; margin-top: 0;'>Kelola keuangan Anda dengan lebih mudah dan cerdas!</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
 
     # Centering the login/register form
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
+    col1_form, col2_form, col3_form = st.columns([1, 2, 1])
+    with col2_form:
         tab1, tab2 = st.tabs(["Masuk", "Daftar"])
 
         with tab1:
